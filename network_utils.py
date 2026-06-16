@@ -1,3 +1,10 @@
+"""网络请求与下载工具模块。
+
+本文件提供 UI 和爬虫模块共同使用的网络能力：URL 可达性检测、文件下载、
+图片下载、基础网络连通性测试和批量 URL 检测。所有函数都抛出明确的
+NetworkError/DownloadError，方便界面层给用户展示友好提示。
+"""
+
 import socket
 import time
 import urllib.error
@@ -6,15 +13,17 @@ from pathlib import Path
 
 
 class NetworkError(Exception):
+    """网络检测失败的统一异常类型。"""
     pass
 
 
 class DownloadError(NetworkError):
+    """下载文件或图片失败时使用的异常类型。"""
     pass
 
 
 def check_url(url, timeout=5):
-    """Check whether a remote resource can be reached."""
+    """用 HEAD 请求检查 URL 是否可访问，服务器不支持 HEAD 时自动退回 GET。"""
     if not url:
         raise NetworkError("URL cannot be empty.")
 
@@ -36,6 +45,7 @@ def check_url(url, timeout=5):
 
 
 def _fallback_get(url, timeout):
+    """部分服务器拒绝 HEAD 请求时，用 GET 请求确认资源是否可访问。"""
     request = urllib.request.Request(url, method="GET")
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -50,7 +60,7 @@ def _fallback_get(url, timeout):
 
 
 def download_file(url, target_path, timeout=30):
-    """Download a resource such as a model weight file with exception handling."""
+    """下载任意远程文件到指定路径，例如模型权重或数据集压缩包。"""
     target = Path(target_path)
     target.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -67,7 +77,7 @@ def download_file(url, target_path, timeout=30):
 
 
 def test_connectivity(host="8.8.8.8", port=53, timeout=3):
-    """Test basic network reachability via TCP socket connection."""
+    """通过 TCP 连接测试基础网络连通性，并返回解析 IP 和延迟。"""
     try:
         resolved = socket.getaddrinfo(host, port, socket.AF_UNSPEC, socket.SOCK_STREAM)
         ip = resolved[0][4][0]
@@ -86,7 +96,7 @@ def test_connectivity(host="8.8.8.8", port=53, timeout=3):
 
 
 def check_urls_batch(urls, max_workers=5, timeout=5):
-    """Check multiple URLs concurrently using a thread pool."""
+    """用线程池并发检测多个 URL，适合批量验证数据或模型资源链接。"""
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     results = {}
@@ -102,7 +112,7 @@ def check_urls_batch(urls, max_workers=5, timeout=5):
 
 
 def download_image_from_url(url, output_dir=None, timeout=30):
-    """Download an image from a URL and return the local file path."""
+    """下载远程图片，并校验 Content-Type 确实为 image/*。"""
     import tempfile
 
     request = urllib.request.Request(url)

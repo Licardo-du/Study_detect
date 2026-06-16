@@ -1,3 +1,10 @@
+"""YOLO 数据集校验与预览模块。
+
+本文件用于检查训练数据集是否符合 YOLO 格式：图片和标签是否配对、
+标签数值是否在 0-1 范围、class_id 是否超过 data.yaml 中的类别数。
+同时可以生成带框预览图，方便在报告中展示数据质量。
+"""
+
 import argparse
 import json
 import random
@@ -11,11 +18,13 @@ COLORS = [(0, 255, 0), (255, 200, 0), (0, 165, 255)]
 
 
 def _load_yaml(yaml_path):
+    """读取 data.yaml，获得类别数量、类别名称和数据集路径配置。"""
     with open(yaml_path, "r") as f:
         return yaml.safe_load(f)
 
 
 def _read_label(label_path):
+    """读取单个 YOLO 标签文件，并校验每行 class/x/y/w/h 格式。"""
     if not label_path.exists():
         return [], None
     lines = []
@@ -40,7 +49,7 @@ def _read_label(label_path):
 
 
 def validate_dataset(dataset_dir, yaml_path):
-    """Validate a YOLO-format dataset and return a report dict."""
+    """校验 YOLO 数据集结构，并返回包含统计信息和问题列表的字典。"""
     dataset_dir = Path(dataset_dir)
     cfg = _load_yaml(yaml_path)
     expected_nc = cfg.get("nc", 3)
@@ -139,6 +148,7 @@ def validate_dataset(dataset_dir, yaml_path):
 
 
 def cmd_validate(dataset_dir, yaml_path, report_path=None):
+    """命令行入口：输出校验摘要，并把完整报告保存为 JSON。"""
     report = validate_dataset(dataset_dir, yaml_path)
     stats = report["statistics"]
 
@@ -187,7 +197,7 @@ def cmd_validate(dataset_dir, yaml_path, report_path=None):
 
 
 def generate_preview(dataset_dir, output_path, grid_size=3):
-    """Draw bounding boxes on sample images and create a grid preview."""
+    """随机抽取样本绘制标签框，生成九宫格预览图。"""
     dataset_dir = Path(dataset_dir)
     img_dir = dataset_dir / "train" / "images"
     lbl_dir = dataset_dir / "train" / "labels"

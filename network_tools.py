@@ -1,3 +1,10 @@
+"""命令行网络诊断工具。
+
+本文件提供独立于主 UI 的网络排查命令，可用于检查下载速度、DNS 解析
+和 HTTP 响应头。主应用中的网络检测主要调用 network_utils.py，
+这里更适合作为开发调试和验收时的辅助工具。
+"""
+
 import argparse
 import socket
 import time
@@ -6,7 +13,7 @@ import urllib.error
 
 
 def cmd_speedtest():
-    """Download a test file and compute bandwidth in Mbps."""
+    """下载固定测试文件并估算当前网络带宽。"""
     url = "http://speedtest.tele2.net/1MB.zip"
     print(f"Downloading test file: {url}")
     start = time.perf_counter()
@@ -29,7 +36,7 @@ def cmd_speedtest():
 
 
 def cmd_dns(host):
-    """Resolve a hostname and print all addresses."""
+    """解析域名，打印 IPv4/IPv6 地址，帮助排查 DNS 问题。"""
     print(f"Resolving: {host}")
     try:
         results = socket.getaddrinfo(host, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
@@ -46,7 +53,7 @@ def cmd_dns(host):
 
 
 def cmd_headers(url):
-    """Send a HEAD request and print all response headers."""
+    """发送 HEAD 请求并打印响应头，帮助判断远程资源类型。"""
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
     print(f"Fetching headers from: {url}")

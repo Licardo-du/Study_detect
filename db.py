@@ -1,3 +1,10 @@
+"""SQLite 数据库访问层。
+
+本文件集中封装所有数据库表结构和增删改查方法。UI 层不直接写 SQL，
+而是调用 Database 的方法，从而保证账号、日志、检测记录、误报样本、
+学习会话、行为明细和训练周期都通过统一入口写入。
+"""
+
 import json
 import sqlite3
 from contextlib import contextmanager
@@ -11,17 +18,22 @@ DEFAULT_DB_PATH = DATA_DIR / "study_monitor.db"
 
 
 def now_text():
+    """生成统一格式的时间字符串，保证所有表的时间字段格式一致。"""
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 class Database:
+    """本地 SQLite 数据库封装类，负责建表、连接管理和业务数据读写。"""
+
     def __init__(self, db_path=DEFAULT_DB_PATH):
+        # 第一次运行时自动创建 project_data 目录和 SQLite 数据库文件。
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.init_tables()
 
     @contextmanager
     def connect(self):
+        """创建数据库连接，并用上下文管理器自动提交或回滚事务。"""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         try:
@@ -34,7 +46,9 @@ class Database:
             conn.close()
 
     def init_tables(self):
+        """初始化所有业务表；已有表不会重复创建，便于多次启动程序。"""
         with self.connect() as conn:
+            # users 保存登录账号、密码哈希和角色权限。
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -45,6 +59,7 @@ class Database:
                     created_at TEXT NOT NULL
                 )
             """)
+            # operation_logs 记录用户登录、检测、导出、网络请求等行为。
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS operation_logs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -55,6 +70,7 @@ class Database:
                     FOREIGN KEY(user_id) REFERENCES users(id)
                 )
             """)
+            # detection_records 保存每次图片、视频、摄像头或屏幕检测的汇总结果。
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS detection_records (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -67,6 +83,7 @@ class Database:
                     FOREIGN KEY(user_id) REFERENCES users(id)
                 )
             """)
+            # model_resources 记录模型或远程资源 URL 的下载和可达状态。
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS model_resources (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -77,6 +94,7 @@ class Database:
                     updated_at TEXT NOT NULL
                 )
             """)
+            # misclassified_samples 保存人工认为可能误识别的样本，供后续复核和回流。
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS misclassified_samples (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -92,6 +110,7 @@ class Database:
                     FOREIGN KEY(user_id) REFERENCES users(id)
                 )
             """)
+            # training_cycles 记录模型再训练版本、状态、mAP 和产物路径。
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS training_cycles (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -108,6 +127,7 @@ class Database:
                     FOREIGN KEY(created_by) REFERENCES users(id)
                 )
             """)
+            # data_reflux_log 记录误报样本从采集目录回流到训练集的路径变化。
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS data_reflux_log (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -122,6 +142,7 @@ class Database:
                     FOREIGN KEY(user_id) REFERENCES users(id)
                 )
             """)
+            # study_sessions 表示一次持续学习监测过程，例如一次摄像头检测。
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS study_sessions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -142,6 +163,7 @@ class Database:
                     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
                 )
             """)
+            # study_behavior_records 保存逐条行为识别明细，是图表和报告的主要数据源。
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS study_behavior_records (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -152,7 +174,7 @@ class Database:
                     confidence REAL NOT NULL,
                     is_alert INTEGER NOT NULL DEFAULT 0,
                     alert_reason TEXT,
-                    source_type TEXT NOT NULL DEFAULT 'image' CHECK(source_type IN ('image', 'camera', 'video')),
+                    source_type TEXT NOT NULL DEFAULT 'image' CHECK(source_type IN ('image', 'camera', 'video', 'screen')),
                     source_path TEXT,
                     image_path TEXT,
                     output_image_path TEXT,
@@ -162,11 +184,13 @@ class Database:
                     FOREIGN KEY(session_id) REFERENCES study_sessions(id) ON DELETE SET NULL
                 )
             """)
+            # 常用查询条件建立索引，提高按用户、时间、类别统计时的速度。
             conn.execute("CREATE INDEX IF NOT EXISTS idx_behavior_user_time ON study_behavior_records(user_id, timestamp)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_behavior_type ON study_behavior_records(behavior_type)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user_time ON study_sessions(user_id, start_time)")
 
     def create_user(self, username, password_hash, salt, role="user"):
+        """新增用户账号，密码只保存哈希和盐，不保存明文。"""
         with self.connect() as conn:
             cursor = conn.execute(
                 "INSERT INTO users(username, password_hash, salt, role, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -175,6 +199,7 @@ class Database:
             return cursor.lastrowid
 
     def get_user_by_username(self, username):
+        """按用户名查找用户，登录和注册查重都会使用。"""
         with self.connect() as conn:
             row = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
             return dict(row) if row else None
@@ -218,6 +243,7 @@ class Database:
             return row is not None
 
     def log_operation(self, user_id, action, detail=""):
+        """写入一条操作日志，用于系统审计和运行过程追踪。"""
         with self.connect() as conn:
             cursor = conn.execute(
                 "INSERT INTO operation_logs(user_id, action, detail, created_at) VALUES (?, ?, ?, ?)",
@@ -241,6 +267,7 @@ class Database:
             return [dict(row) for row in rows]
 
     def record_detection(self, user_id, source, summary, alerts, output_path=None):
+        """保存一次检测任务的汇总结果，summary 和 alerts 用 JSON 存储。"""
         with self.connect() as conn:
             cursor = conn.execute(
                 """
@@ -302,6 +329,7 @@ class Database:
             return cursor.rowcount
 
     def insert_misclassified_sample(self, image_path, original_predictions, user_id):
+        """登记误识别样本，后续可补充人工修正和回流路径。"""
         with self.connect() as conn:
             cursor = conn.execute(
                 """
@@ -400,6 +428,7 @@ class Database:
             return cursor.lastrowid
 
     def start_study_session(self, user_id, session_name=""):
+        """开始一次学习监测会话，通常对应摄像头或屏幕识别开始。"""
         now = now_text()
         with self.connect() as conn:
             cursor = conn.execute(
@@ -409,6 +438,7 @@ class Database:
             return cursor.lastrowid
 
     def end_study_session(self, session_id, focus_score=None, effective_seconds=None, notes=None, alert_stats=None):
+        """结束学习会话，并写入时长、专注分和各类告警统计。"""
         with self.connect() as conn:
             row = conn.execute("SELECT start_time FROM study_sessions WHERE id = ?", (session_id,)).fetchone()
             if not row:
@@ -461,6 +491,7 @@ class Database:
     def add_behavior_record(self, user_id, behavior_type, confidence, session_id=None,
                             is_alert=False, alert_reason="", source_type="image",
                             source_path="", image_path="", output_image_path="", extra_info=None):
+        """写入单条行为识别明细，支持后续按类别、用户和时间段统计。"""
         timestamp = now_text()
         extra_json = json.dumps(extra_info, ensure_ascii=False) if extra_info else None
         with self.connect() as conn:

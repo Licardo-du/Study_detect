@@ -1,7 +1,18 @@
+"""AI 检测核心模块。
+
+本文件封装 YOLOv8 推理和课堂行为后处理规则。UI 层只调用
+StudyBehaviorDetector 的 predict_image、predict_frame、run_video 等方法，
+不直接接触模型细节。这里同时实现了 phone、sleep、eat 三类行为的阈值、
+姿态比例、滑动窗口和运动量规则。
+"""
+
 from collections import deque
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
+
+# 摄像头断流后短暂等待再重连，避免循环过快占满 CPU。
+import time
 
 try:
     import cv2
@@ -19,6 +30,8 @@ BASE_DIR = Path(__file__).resolve().parent
 
 @dataclass
 class DetectionEvent:
+    """单个检测框转换后的业务事件，便于写入数据库和报告。"""
+
     label: str
     confidence: float
     bbox: tuple
@@ -34,6 +47,8 @@ class DetectionEvent:
 
 @dataclass
 class SmartDetectConfig:
+    """检测阈值配置集中放在这里，便于调参和报告说明。"""
+
     model_path: Path = BASE_DIR / "models" / "best.pt"
     image_size: int = 640
     base_conf: float = 0.25
@@ -51,7 +66,7 @@ class SmartDetectConfig:
 
 
 class StudyBehaviorDetector:
-    """YOLOv8 detector with SmartDetect post-processing rules."""
+    """YOLOv8 检测器，负责模型加载、逐帧推理和行为规则判断。"""
 
     def __init__(self, config=None):
         self.config = config or SmartDetectConfig()
@@ -64,6 +79,7 @@ class StudyBehaviorDetector:
         self.sleep_duration_counter = 0
 
     def load_model(self):
+        """懒加载 YOLO 模型，第一次推理时才真正读取 best.pt。"""
         self._ensure_vision_packages()
         if self.model is not None:
             return self.model
@@ -80,6 +96,7 @@ class StudyBehaviorDetector:
         return self.model
 
     def reset_state(self):
+        """重置跨帧状态，避免上一张图片或上一段视频影响下一次检测。"""
         self.prev_gray = None
         self.eat_status_window = deque(
             [0] * self.config.eat_window_size, maxlen=self.config.eat_window_size
@@ -88,6 +105,7 @@ class StudyBehaviorDetector:
         self.sleep_duration_counter = 0
 
     def predict_frame(self, frame):
+        """对单帧图像进行推理，并应用 phone/sleep/eat 的业务规则。"""
         self._ensure_vision_packages()
         model = self.load_model()
         cfg = self.config
@@ -206,6 +224,7 @@ class StudyBehaviorDetector:
         return processed, [event.to_dict() for event in events], summary
 
     def predict_image(self, image_path, output_dir=None):
+        """检测单张图片，输出带框图片、事件列表和汇总信息。"""
         self._ensure_vision_packages()
         image_path = Path(image_path)
         frame = cv2.imread(str(image_path))
@@ -221,30 +240,43 @@ class StudyBehaviorDetector:
         cv2.imwrite(str(output_path), annotated)
         return output_path, events, summary
 
-    def run_camera(self, source=0):
+    def run_camera(self, source=0, stop_event=None, reconnect=True, reconnect_delay=2):
+        """旧式 OpenCV 弹窗摄像头检测入口；新版 UI 主要使用内嵌预览。"""
         self._ensure_vision_packages()
         self.reset_state()
-        cap = cv2.VideoCapture(source)
-        if not cap.isOpened():
-            raise RuntimeError(f"Unable to open camera/video source: {source}")
-
+        title = "Study Behavior Monitor - press q to quit"
         try:
-            while cap.isOpened():
-                ok, frame = cap.read()
-                if not ok:
+            while not self._should_stop(stop_event):
+                # 每轮重新打开视频源，支持网络流短暂断开后的自动恢复。
+                cap = self._open_capture(source)
+                if not cap.isOpened():
+                    raise RuntimeError(f"Unable to open camera/video source: {source}")
+
+                try:
+                    while cap.isOpened() and not self._should_stop(stop_event):
+                        ok, frame = cap.read()
+                        if not ok:
+                            # 文件结束或网络流断开时，根据 reconnect 决定退出或重连。
+                            if reconnect and not self._should_stop(stop_event):
+                                break
+                            return
+                        annotated, _, summary = self.predict_frame(frame)
+                        cv2.imshow(title, annotated)
+                        if summary["alert_labels"]:
+                            print("Alert:", ", ".join(summary["alert_labels"]))
+                        if cv2.waitKey(1) & 0xFF == ord("q"):
+                            return
+                finally:
+                    cap.release()
+
+                if not reconnect:
                     break
-                annotated, _, summary = self.predict_frame(frame)
-                title = "Study Behavior Monitor - press q to quit"
-                cv2.imshow(title, annotated)
-                if summary["alert_labels"]:
-                    print("Alert:", ", ".join(summary["alert_labels"]))
-                if cv2.waitKey(1) & 0xFF == ord("q"):
-                    break
+                time.sleep(reconnect_delay)
         finally:
-            cap.release()
             cv2.destroyAllWindows()
 
     def run_video(self, input_path, output_path=None):
+        """逐帧检测视频文件，输出带框视频和整体告警汇总。"""
         self._ensure_vision_packages()
         self.reset_state()
         input_path = Path(input_path)
@@ -292,6 +324,25 @@ class StudyBehaviorDetector:
         conf = float(box.conf[0])
         bbox = tuple(map(int, box.xyxy[0]))
         return label, conf, bbox
+
+    @staticmethod
+    def _should_stop(stop_event):
+        """Return True when the tkinter thread has requested camera shutdown."""
+        return stop_event is not None and stop_event.is_set()
+
+    @staticmethod
+    def _open_capture(source):
+        """Open an OpenCV capture with timeouts so bad streams fail gracefully."""
+        cap = cv2.VideoCapture()
+        # 不同 OpenCV 构建支持的属性不同，设置前先判断可用性。
+        if hasattr(cv2, "CAP_PROP_OPEN_TIMEOUT_MSEC"):
+            cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000)
+        if hasattr(cv2, "CAP_PROP_READ_TIMEOUT_MSEC"):
+            cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000)
+        if hasattr(cv2, "CAP_PROP_BUFFERSIZE"):
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        cap.open(source)
+        return cap
 
     @staticmethod
     def _ensure_vision_packages():

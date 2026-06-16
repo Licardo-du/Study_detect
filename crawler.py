@@ -1,3 +1,10 @@
+"""训练图片采集模块。
+
+本文件提供面向 phone、sleep、eat 三类行为的网络图片采集能力。
+它不会直接参与模型推理，而是为后续扩充训练集、误报回流和再训练
+提供原始图片来源。UI 中的“数据工具/采集训练图片”会调用这里的函数。
+"""
+
 import argparse
 import random
 import re
@@ -53,7 +60,7 @@ CLASS_KEYWORDS = {
 
 
 def _download_urls(urls, output_dir, max_images):
-    """Download images from a list of URLs with auto-retry on failure."""
+    """批量下载图片 URL；失败时重试一次，并统计成功和失败数量。"""
     urls = urls[:max_images]
     downloaded = 0
     failed = 0
@@ -84,7 +91,7 @@ def _download_urls(urls, output_dir, max_images):
 
 
 def search_baidu_images(keyword, max_images=30, output_dir=None, search_delay=3):
-    """Search Baidu Images for a keyword and download the resulting images."""
+    """按关键词从百度图片解析候选图片 URL，并下载到指定目录。"""
     output_dir = Path(output_dir or BASE_DIR / "raw_data")
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -122,6 +129,7 @@ def search_baidu_images(keyword, max_images=30, output_dir=None, search_delay=3)
 
 
 def search_bing_images(keyword, max_images=30, output_dir=None, search_delay=3):
+    """按关键词从 Bing 图片解析候选图片 URL，并下载到指定目录。"""
     """Search Bing Images for a keyword and download the resulting images."""
     output_dir = Path(output_dir or BASE_DIR / "raw_data")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -160,6 +168,7 @@ def search_bing_images(keyword, max_images=30, output_dir=None, search_delay=3):
 
 
 def crawl_all_classes(output_dir="raw_data", max_per_class=30, engine="baidu"):
+    """按预设关键词采集 phone、sleep、eat 三类图片，形成原始数据集。"""
     """Download images for all three classes (phone/sleep/eat)."""
     search = search_baidu_images if engine == "baidu" else search_bing_images
     output_root = Path(output_dir or BASE_DIR / "raw_data")

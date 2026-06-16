@@ -1,3 +1,10 @@
+"""训练图片预处理模块。
+
+本文件用于把爬取或人工收集到的原始图片整理成更适合训练的数据：
+校验坏图、去重、统一尺寸、划分 train/val。它属于数据准备流程，
+不会直接影响实时检测，但会影响后续模型训练质量。
+"""
+
 import argparse
 import hashlib
 import json
@@ -12,6 +19,7 @@ IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".tiff", ".webp"}
 
 
 def _collect_images(input_dir):
+    """递归收集目录中的图片文件，并跳过内部处理目录。"""
     input_dir = Path(input_dir)
     if not input_dir.is_dir():
         raise FileNotFoundError(f"Directory not found: {input_dir}")
@@ -26,7 +34,7 @@ def _collect_images(input_dir):
 
 
 def cmd_validate(input_dir):
-    """Check all images in a directory and report corrupt files."""
+    """检查目录内图片是否能被 OpenCV 正常读取，并生成校验报告。"""
     images = _collect_images(input_dir)
     if not images:
         print(f"No images found in {input_dir}")
@@ -78,7 +86,7 @@ def cmd_validate(input_dir):
 
 
 def cmd_deduplicate(input_dir):
-    """Remove duplicate images using MD5 hash, per subdirectory."""
+    """按 MD5 哈希查找重复图片，并移动到 _duplicates 目录。"""
     input_dir = Path(input_dir)
     total = 0
     total_dup = 0
@@ -110,6 +118,7 @@ def cmd_deduplicate(input_dir):
 
 
 def _scale_to_max(img, target_size):
+    """按最长边等比缩放图片，保持原始宽高比例。"""
     h, w = img.shape[:2]
     scale = target_size / max(h, w)
     new_w, new_h = int(w * scale), int(h * scale)
@@ -117,7 +126,7 @@ def _scale_to_max(img, target_size):
 
 
 def cmd_resize(input_dir, output_dir, size=640):
-    """Resize all images to a target size (letterbox) and convert to JPG."""
+    """批量缩放图片并转换为 JPG，统一训练输入尺寸。"""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     images = _collect_images(input_dir)
@@ -169,7 +178,7 @@ def cmd_split(input_dir, output_base, ratio=0.8):
 
 
 def cmd_pipeline(input_dir, output_dir, size=640, ratio=0.8):
-    """Run the full preprocessing pipeline: validate → deduplicate → resize → split."""
+    """完整预处理流水线：校验、去重、缩放、划分训练集和验证集。"""
     print("=" * 50)
     print("Step 1/4: Validate")
     print("=" * 50)
