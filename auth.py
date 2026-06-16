@@ -88,6 +88,27 @@ class AuthService:
             f"Changed password for {username}.",
         )
 
+    def reset_password(self, target_username, new_password, operator):
+        if not self.is_admin(operator):
+            raise AuthError("Admin permission required.")
+        user = self.db.get_user_by_username(target_username)
+        if not user:
+            raise AuthError("User does not exist.")
+        password_hash, salt = hash_password(new_password)
+        self.db.update_user_password(target_username, password_hash, salt)
+        self.db.log_operation(operator["id"], "reset_password", f"Reset password for {target_username}")
+
+    def change_role(self, target_username, new_role, operator):
+        if not self.is_admin(operator):
+            raise AuthError("Admin permission required.")
+        if target_username == DEFAULT_ADMIN_USERNAME and new_role != "admin":
+            raise AuthError("Cannot demote default admin.")
+        user = self.db.get_user_by_username(target_username)
+        if not user:
+            raise AuthError("User does not exist.")
+        self.db.update_user_role(target_username, new_role)
+        self.db.log_operation(operator["id"], "change_role", f"Changed {target_username} role to {new_role}")
+
     def list_users(self, operator):
         if not self.is_admin(operator):
             raise AuthError("Admin permission is required.")
