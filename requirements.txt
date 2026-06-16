@@ -2,3 +2,9 @@ ultralytics
 opencv-python
 numpy
 matplotlib
+torch
+Pillow
+mss
+python-docx
+reportlab
+PyYAML

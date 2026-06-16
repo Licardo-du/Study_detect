@@ -33,9 +33,14 @@ yolo26n.pt
 models/last.pt
 models/*.onnx
 
-raw_data/
-processed/
-dataset/
-test_*/
-*.docx
-preview_grid.jpg
+result/
+relabel/
+outputs/
+project_data/
+models/best_fp16.pt
+models/best_int8_quantized.pt
+models/quantization_report.json
+models/benchmark_report.json
+
+reports/
+result/
