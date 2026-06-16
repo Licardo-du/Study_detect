@@ -221,7 +221,11 @@ class StudyBehaviorDetector:
         cv2.imwrite(str(output_path), annotated)
         return output_path, events, summary
 
-    def run_camera(self, source=0):
+    def run_camera(self, source=0, on_frame=None):
+        """
+        Run camera detection with optional per-frame callback.
+        on_frame(annotated_frame, events_list, summary_dict)
+        """
         self._ensure_vision_packages()
         self.reset_state()
         cap = cv2.VideoCapture(source)
@@ -233,7 +237,9 @@ class StudyBehaviorDetector:
                 ok, frame = cap.read()
                 if not ok:
                     break
-                annotated, _, summary = self.predict_frame(frame)
+                annotated, events, summary = self.predict_frame(frame)
+                if on_frame is not None:
+                    on_frame(annotated, events, summary)
                 title = "Study Behavior Monitor - press q to quit"
                 cv2.imshow(title, annotated)
                 if summary["alert_labels"]:
@@ -244,7 +250,11 @@ class StudyBehaviorDetector:
             cap.release()
             cv2.destroyAllWindows()
 
-    def run_video(self, input_path, output_path=None):
+    def run_video(self, input_path, output_path=None, on_frame=None):
+        """
+        Run video detection with optional per-frame callback.
+        on_frame(annotated_frame, events_list, summary_dict)
+        """
         self._ensure_vision_packages()
         self.reset_state()
         input_path = Path(input_path)
@@ -272,9 +282,11 @@ class StudyBehaviorDetector:
                 ok, frame = cap.read()
                 if not ok:
                     break
-                annotated, _, summary = self.predict_frame(frame)
+                annotated, events, summary = self.predict_frame(frame)
                 writer.write(annotated)
                 all_alerts.update(summary["alert_labels"])
+                if on_frame is not None:
+                    on_frame(annotated, events, summary)
                 frame_count += 1
         finally:
             cap.release()
