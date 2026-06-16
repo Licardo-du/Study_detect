@@ -93,36 +93,6 @@ class Database:
                 )
             """)
             conn.execute("""
-                CREATE TABLE IF NOT EXISTS training_cycles (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    version TEXT UNIQUE NOT NULL,
-                    base_dataset TEXT,
-                    additional_sample_count INTEGER DEFAULT 0,
-                    mAP REAL,
-                    status TEXT DEFAULT 'pending',
-                    started_at TEXT,
-                    finished_at TEXT,
-                    model_path TEXT,
-                    created_by INTEGER,
-                    created_at TEXT NOT NULL,
-                    FOREIGN KEY(created_by) REFERENCES users(id)
-                )
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS data_reflux_log (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    sample_id INTEGER,
-                    source_image_path TEXT,
-                    target_image_path TEXT,
-                    target_label_path TEXT,
-                    operation TEXT DEFAULT 'relabel',
-                    user_id INTEGER,
-                    created_at TEXT NOT NULL,
-                    FOREIGN KEY(sample_id) REFERENCES misclassified_samples(id),
-                    FOREIGN KEY(user_id) REFERENCES users(id)
-                )
-            """)
-            conn.execute("""
                 CREATE TABLE IF NOT EXISTS study_sessions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id INTEGER NOT NULL,
@@ -353,51 +323,6 @@ class Database:
         with self.connect() as conn:
             cursor = conn.execute("DELETE FROM misclassified_samples WHERE id = ?", (sample_id,))
             return cursor.rowcount
-
-    def create_training_cycle(self, version, base_dataset, created_by):
-        with self.connect() as conn:
-            cursor = conn.execute(
-                "INSERT INTO training_cycles (version, base_dataset, created_by, created_at) VALUES (?, ?, ?, ?)",
-                (version, base_dataset, created_by, now_text())
-            )
-            return cursor.lastrowid
-
-    def update_training_cycle_status(self, cycle_id, status, mAP=None, model_path=None):
-        with self.connect() as conn:
-            updates = ["status = ?"]
-            params = [status]
-            if mAP is not None:
-                updates.append("mAP = ?")
-                params.append(mAP)
-            if model_path is not None:
-                updates.append("model_path = ?")
-                params.append(model_path)
-            if status == "completed":
-                updates.append("finished_at = ?")
-                params.append(now_text())
-            elif status == "training":
-                updates.append("started_at = ?")
-                params.append(now_text())
-            params.append(cycle_id)
-            sql = f"UPDATE training_cycles SET {', '.join(updates)} WHERE id = ?"
-            cursor = conn.execute(sql, params)
-            return cursor.rowcount
-
-    def get_training_cycles(self):
-        with self.connect() as conn:
-            rows = conn.execute("SELECT * FROM training_cycles ORDER BY created_at DESC").fetchall()
-            return [dict(row) for row in rows]
-
-    def log_data_reflux(self, sample_id, source_image_path, target_image_path, target_label_path, user_id):
-        with self.connect() as conn:
-            cursor = conn.execute(
-                """
-                INSERT INTO data_reflux_log (sample_id, source_image_path, target_image_path, target_label_path, user_id, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (sample_id, source_image_path, target_image_path, target_label_path, user_id, now_text())
-            )
-            return cursor.lastrowid
 
     def start_study_session(self, user_id, session_name=""):
         now = now_text()
