@@ -1,0 +1,4 @@
+pyinstaller
+cx_Freeze
+setuptools
+wheel

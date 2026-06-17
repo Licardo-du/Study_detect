@@ -8,3 +8,4 @@ mss
 python-docx
 reportlab
 PyYAML
+lap>=0.5.12

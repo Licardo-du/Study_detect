@@ -13,7 +13,9 @@ from pathlib import Path
 import cv2
 import yaml
 
-BASE_DIR = Path(__file__).resolve().parent
+from path_utils import runtime_path
+
+BASE_DIR = runtime_path(".")
 COLORS = [(0, 255, 0), (255, 200, 0), (0, 165, 255)]
 
 

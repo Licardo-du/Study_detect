@@ -11,6 +11,8 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 
+from path_utils import resource_path, runtime_path
+
 # 摄像头断流后短暂等待再重连，避免循环过快占满 CPU。
 import time
 
@@ -23,9 +25,6 @@ try:
     import numpy as np
 except ImportError:
     np = None
-
-
-BASE_DIR = Path(__file__).resolve().parent
 
 
 @dataclass
@@ -49,7 +48,7 @@ class DetectionEvent:
 class SmartDetectConfig:
     """检测阈值配置集中放在这里，便于调参和报告说明。"""
 
-    model_path: Path = BASE_DIR / "models" / "best.pt"
+    model_path: Path = resource_path("models/best.pt")
     image_size: int = 640
     base_conf: float = 0.25
     conf_phone: float = 0.40
@@ -234,7 +233,7 @@ class StudyBehaviorDetector:
         self.reset_state()
         annotated, events, summary = self.predict_frame(frame)
 
-        output_dir = Path(output_dir or BASE_DIR / "outputs")
+        output_dir = Path(output_dir or runtime_path("outputs"))
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = output_dir / f"{image_path.stem}_detected.jpg"
         cv2.imwrite(str(output_path), annotated)
@@ -288,7 +287,7 @@ class StudyBehaviorDetector:
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         fps = cap.get(cv2.CAP_PROP_FPS) or 25
 
-        output_path = Path(output_path or BASE_DIR / "outputs" / f"{input_path.stem}_smart.mp4")
+        output_path = Path(output_path or runtime_path("outputs") / f"{input_path.stem}_smart.mp4")
         output_path.parent.mkdir(parents=True, exist_ok=True)
         writer = cv2.VideoWriter(
             str(output_path),

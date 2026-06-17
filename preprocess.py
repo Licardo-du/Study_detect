@@ -14,7 +14,9 @@ from pathlib import Path
 
 import cv2
 
-BASE_DIR = Path(__file__).resolve().parent
+from path_utils import runtime_path
+
+BASE_DIR = runtime_path(".")
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".tiff", ".webp"}
 
 

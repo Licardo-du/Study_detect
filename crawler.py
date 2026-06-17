@@ -14,9 +14,10 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+from path_utils import runtime_path
 from network_utils import download_image_from_url, DownloadError
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = runtime_path(".")
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "

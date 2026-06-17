@@ -11,9 +11,9 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
+from path_utils import runtime_path
 
-BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "project_data"
+DATA_DIR = runtime_path("project_data")
 DEFAULT_DB_PATH = DATA_DIR / "study_monitor.db"
 
 

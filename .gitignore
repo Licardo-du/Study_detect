@@ -44,3 +44,8 @@ models/benchmark_report.json
 
 reports/
 result/
+
+build/
+dist/
+*.toc
+*.manifest

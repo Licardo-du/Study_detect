@@ -15,6 +15,7 @@ import shutil
 import threading
 import tkinter as tk
 import tkinter.font as tkfont
+import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -34,6 +35,7 @@ from network_utils import (
     download_image_from_url,
     test_connectivity,
 )
+from path_utils import resource_path, runtime_path
 from visualization import (
     count_alert_labels,
     export_alert_chart,
@@ -43,9 +45,23 @@ from visualization import (
 
 
 # 项目根路径统一从当前文件推导，打包后也能稳定定位模型和数据目录。
-BASE_DIR = Path(__file__).resolve().parent
-MODELS_DIR = BASE_DIR / "models"
-MODEL_PT_PATH = MODELS_DIR / "best.pt"
+def write_runtime_error(context, exc_type, exc_value, exc_tb):
+    """Write hidden GUI exceptions to a log file beside the exe or source tree."""
+    log_dir = runtime_path("logs")
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / "runtime_error.log"
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    details = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+    with open(log_path, "a", encoding="utf-8") as f:
+        f.write(f"\n[{timestamp}] {context}\n")
+        f.write(details)
+        f.write("\n")
+    return log_path
+
+
+BASE_DIR = runtime_path(".")
+MODELS_DIR = runtime_path("models")
+MODEL_PT_PATH = resource_path("models/best.pt")
 MODEL_FP16_PATH = MODELS_DIR / "best_fp16.pt"
 MODEL_INT8_PATH = MODELS_DIR / "best_int8_quantized.pt"
 MODEL_QUANT_REPORT_PATH = MODELS_DIR / "quantization_report.json"
@@ -181,6 +197,14 @@ def configure_app_style(root):
         padding=(14, 8),
     )
     style.map("Danger.TButton", background=[("active", "#b91c1c")])
+    style.configure(
+        "Task.Horizontal.TProgressbar",
+        background=COLORS["accent"],
+        troughcolor="#dbe4ef",
+        bordercolor=COLORS["border"],
+        lightcolor=COLORS["accent"],
+        darkcolor=COLORS["accent"],
+    )
     style.configure(
         "Treeview",
         rowheight=30,
@@ -820,6 +844,7 @@ class MainFrame(ttk.Frame):
         self._build_recent_tables(content)
         self._build_status_bar(content)
         self.apply_visual_zoom()
+        self.after(0, self._sync_workspace_layout)
         self.refresh_dashboard()
 
     def _clear_main_content(self):
@@ -834,6 +859,23 @@ class MainFrame(ttk.Frame):
         self.records_tree = None
         self.logs_tree = None
         self.stat_cards = {}
+        self.tool_progress = {}
+        self._reset_workspace_scroll()
+
+    def _reset_workspace_scroll(self):
+        """Reset the right workspace canvas after page switches."""
+        if self.main_canvas is None:
+            return
+        try:
+            self.main_canvas.update_idletasks()
+            self.main_canvas.configure(scrollregion=self.main_canvas.bbox("all"))
+            self.main_canvas.yview_moveto(0)
+        except tk.TclError:
+            pass
+
+    def _sync_workspace_layout(self):
+        """Synchronize canvas scrollregion after Tk finishes creating widgets."""
+        self._reset_workspace_scroll()
 
     def _open_main_page(self, title, show_title=True):
         """在右侧主台打开完整页面，代替小弹窗。"""
@@ -854,6 +896,7 @@ class MainFrame(ttk.Frame):
                 font=("Microsoft YaHei UI", 22, "bold"),
             ).grid(row=0, column=0, sticky="w", pady=(0, 14))
         self.apply_visual_zoom()
+        self.after(0, self._sync_workspace_layout)
         return page
 
     def _build_nav_menu(self, parent, row, label, items):
@@ -913,13 +956,100 @@ class MainFrame(ttk.Frame):
                 fg=COLORS["text"],
                 font=("Microsoft YaHei UI", 13, "bold"),
             ).grid(row=0, column=0, sticky="w")
-            ttk.Button(
+            button = ttk.Button(
                 card,
                 text="打开",
                 style="Accent.TButton",
                 command=lambda action=command: action(),
-            ).grid(row=1, column=0, sticky="ew", pady=(14, 0))
+            )
+            button.grid(row=1, column=0, sticky="ew", pady=(14, 0))
+            if title == "数据工具":
+                self._attach_tool_progress(card, item_label, button)
         self.apply_visual_zoom()
+        self.after(0, self._sync_workspace_layout)
+
+    def _attach_tool_progress(self, card, item_label, button):
+        """Show the current data-tool progress inside its card."""
+        progress_var = tk.DoubleVar(value=0)
+        percent_var = tk.StringVar(value="0%")
+        status_var = tk.StringVar(value="待开始")
+        row = tk.Frame(card, bg=COLORS["card"])
+        row.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        row.columnconfigure(0, weight=1)
+        bar = ttk.Progressbar(
+            row,
+            variable=progress_var,
+            maximum=100,
+            mode="determinate",
+            style="Task.Horizontal.TProgressbar",
+        )
+        bar.grid(row=0, column=0, sticky="ew")
+        tk.Label(
+            row,
+            textvariable=percent_var,
+            bg=COLORS["card"],
+            fg=COLORS["accent"],
+            font=("Microsoft YaHei UI", 10, "bold"),
+            width=5,
+            anchor="e",
+        ).grid(row=0, column=1, sticky="e", padx=(10, 0))
+        tk.Label(
+            card,
+            textvariable=status_var,
+            bg=COLORS["card"],
+            fg=COLORS["muted"],
+            font=FONTS["small"],
+        ).grid(row=3, column=0, sticky="w", pady=(6, 0))
+        self.tool_progress[item_label] = {
+            "progress": progress_var,
+            "percent": percent_var,
+            "status": status_var,
+            "button": button,
+        }
+
+    def _reset_tool_progress(self, item_label, text="准备开始..."):
+        state = self.tool_progress.get(item_label)
+        if not state:
+            return
+        state["progress"].set(0)
+        state["percent"].set("0%")
+        state["status"].set(text)
+        state["button"].configure(state="disabled")
+
+    def _post_tool_progress(self, item_label, done, total, text):
+        percent = 100 if total <= 0 else min(100, max(0, done / total * 100))
+
+        def update():
+            state = self.tool_progress.get(item_label)
+            if not state:
+                return
+            state["progress"].set(percent)
+            state["percent"].set(f"{percent:.0f}%")
+            state["status"].set(f"{text}（{percent:.0f}%）")
+
+        self.after(0, update)
+
+    def _finish_tool_progress(self, item_label, text="已完成"):
+        def update():
+            state = self.tool_progress.get(item_label)
+            if not state:
+                return
+            state["progress"].set(100)
+            state["percent"].set("100%")
+            state["status"].set(text)
+            state["button"].configure(state="normal")
+
+        self.after(0, update)
+
+    def _fail_tool_progress(self, item_label, text="执行失败"):
+        def update():
+            state = self.tool_progress.get(item_label)
+            if not state:
+                return
+            state["status"].set(text)
+            state["button"].configure(state="normal")
+
+        self.after(0, update)
 
     def toggle_sidebar(self):
         """折叠或展开左侧工具栏，为右侧主台留出更多空间。"""
@@ -2251,21 +2381,21 @@ class MainFrame(ttk.Frame):
         return [item.strip() for item in normalized.splitlines() if item.strip()]
 
     def crawl_training_images(self):
-        """调用爬虫模块采集 phone/sleep/eat 三类训练图片。"""
-        output_dir = filedialog.askdirectory(title="选择爬取图片保存目录")
+        """Run image crawler for training images."""
+        output_dir = filedialog.askdirectory(title="\u9009\u62e9\u722c\u53d6\u56fe\u7247\u4fdd\u5b58\u76ee\u5f55")
         if not output_dir:
             return
         engine = simpledialog.askstring(
-            "图片搜索引擎",
-            "请输入搜索引擎：bing 或 baidu",
+            "\u56fe\u7247\u641c\u7d22\u5f15\u64ce",
+            "\u8bf7\u8f93\u5165\u641c\u7d22\u5f15\u64ce\uff1abing \u6216 baidu",
             initialvalue="bing",
             parent=self,
         )
         if not engine:
             return
         max_count = simpledialog.askinteger(
-            "每类图片数量",
-            "请输入每个类别最多下载的图片数量：",
+            "\u6bcf\u7c7b\u56fe\u7247\u6570\u91cf",
+            "\u8bf7\u8f93\u5165\u6bcf\u4e2a\u7c7b\u522b\u6700\u591a\u4e0b\u8f7d\u7684\u56fe\u7247\u6570\u91cf\uff1a",
             initialvalue=20,
             minvalue=1,
             maxvalue=200,
@@ -2273,31 +2403,45 @@ class MainFrame(ttk.Frame):
         )
         if not max_count:
             return
+        label = "\u91c7\u96c6\u8bad\u7ec3\u56fe\u7247"
+        self._reset_tool_progress(label, "\u51c6\u5907\u91c7\u96c6...")
         self._run_task(
-            lambda: self._crawl_training_images_worker(output_dir, max_count, engine.strip().lower()),
-            "正在采集训练图片...",
+            lambda: self._crawl_training_images_worker(
+                output_dir,
+                max_count,
+                engine.strip().lower(),
+                lambda done, total, msg: self._post_tool_progress(label, done, total, msg),
+            ),
+            "\u6b63\u5728\u91c7\u96c6\u8bad\u7ec3\u56fe\u7247...",
             error_action="crawl_images_failed",
+            show_global_progress=False,
+            on_done=lambda: self._finish_tool_progress(label, "\u91c7\u96c6\u5b8c\u6210"),
+            on_error=lambda exc: self._fail_tool_progress(label, f"\u91c7\u96c6\u5931\u8d25\uff1a{exc}"),
         )
 
-    def _crawl_training_images_worker(self, output_dir, max_count, engine):
-        """在线程中运行 crawler.crawl_all_classes，避免网络请求卡住界面。"""
+    def _crawl_training_images_worker(self, output_dir, max_count, engine, progress=None):
+        """Run crawler.crawl_all_classes in background."""
         from crawler import crawl_all_classes
 
+        if progress:
+            progress(1, 3, "\u6b63\u5728\u542f\u52a8\u56fe\u7247\u91c7\u96c6")
         result = crawl_all_classes(output_dir=output_dir, max_per_class=max_count, engine=engine)
+        if progress:
+            progress(3, 3, "\u91c7\u96c6\u4efb\u52a1\u5b8c\u6210")
         self.db.log_operation(self.user["id"], "crawl_images", json.dumps(result, ensure_ascii=False))
-        self.after(0, lambda: self._show_text_window("图片采集结果", json.dumps(result, ensure_ascii=False, indent=2)))
+        self.after(0, lambda: self._show_text_window("\u56fe\u7247\u91c7\u96c6\u7ed3\u679c", json.dumps(result, ensure_ascii=False, indent=2)))
 
     def run_preprocess_pipeline(self):
-        """调用预处理模块完成校验、去重、缩放和训练验证集拆分。"""
-        input_dir = filedialog.askdirectory(title="选择原始图片目录")
+        """Run preprocess pipeline for image dataset."""
+        input_dir = filedialog.askdirectory(title="\u9009\u62e9\u539f\u59cb\u56fe\u7247\u76ee\u5f55")
         if not input_dir:
             return
-        output_dir = filedialog.askdirectory(title="选择预处理输出目录")
+        output_dir = filedialog.askdirectory(title="\u9009\u62e9\u9884\u5904\u7406\u8f93\u51fa\u76ee\u5f55")
         if not output_dir:
             return
         size = simpledialog.askinteger(
-            "输出尺寸",
-            "请输入最长边目标尺寸：",
+            "\u8f93\u51fa\u5c3a\u5bf8",
+            "\u8bf7\u8f93\u5165\u6700\u957f\u8fb9\u76ee\u6807\u5c3a\u5bf8\uff1a",
             initialvalue=640,
             minvalue=128,
             maxvalue=2048,
@@ -2305,71 +2449,112 @@ class MainFrame(ttk.Frame):
         )
         if not size:
             return
+        label = "\u9884\u5904\u7406\u56fe\u7247\u96c6"
+        self._reset_tool_progress(label, "\u51c6\u5907\u9884\u5904\u7406...")
         self._run_task(
-            lambda: self._preprocess_pipeline_worker(input_dir, output_dir, size),
-            "正在预处理图片集...",
+            lambda: self._preprocess_pipeline_worker(
+                input_dir,
+                output_dir,
+                size,
+                lambda done, total, msg: self._post_tool_progress(label, done, total, msg),
+            ),
+            "\u6b63\u5728\u9884\u5904\u7406\u56fe\u7247\u96c6...",
             error_action="preprocess_failed",
+            show_global_progress=False,
+            on_done=lambda: self._finish_tool_progress(label, "\u9884\u5904\u7406\u5b8c\u6210"),
+            on_error=lambda exc: self._fail_tool_progress(label, f"\u9884\u5904\u7406\u5931\u8d25\uff1a{exc}"),
         )
 
-    def _preprocess_pipeline_worker(self, input_dir, output_dir, size):
-        """在线程中运行 preprocess.cmd_pipeline，并记录输出目录。"""
+    def _preprocess_pipeline_worker(self, input_dir, output_dir, size, progress=None):
+        """Run preprocess.cmd_pipeline in background."""
         from preprocess import cmd_pipeline
 
+        total = max(1, len([item for item in Path(input_dir).rglob("*") if item.is_file()]))
+        if progress:
+            progress(1, total, "\u5f00\u59cb\u9884\u5904\u7406\u56fe\u7247\u96c6")
         result = cmd_pipeline(input_dir, output_dir, size=size)
+        if progress:
+            progress(total, total, "\u9884\u5904\u7406\u4efb\u52a1\u5b8c\u6210")
         self.db.log_operation(self.user["id"], "preprocess_dataset", f"{input_dir} -> {output_dir}")
-        self.after(0, lambda: self._show_text_window("预处理完成", json.dumps(result or {}, ensure_ascii=False, indent=2)))
+        self.after(0, lambda: self._show_text_window("\u9884\u5904\u7406\u5b8c\u6210", json.dumps(result or {}, ensure_ascii=False, indent=2)))
 
     def validate_training_dataset(self):
-        """调用数据集校验模块检查图片、标签和 data.yaml 是否一致。"""
-        dataset_dir = filedialog.askdirectory(title="选择 YOLO 数据集目录")
+        """Validate YOLO dataset."""
+        dataset_dir = filedialog.askdirectory(title="\u9009\u62e9 YOLO \u6570\u636e\u96c6\u76ee\u5f55")
         if not dataset_dir:
             return
         yaml_path = filedialog.askopenfilename(
-            title="选择 data.yaml",
+            title="\u9009\u62e9 data.yaml",
             filetypes=[("YAML", "*.yaml *.yml"), ("All files", "*.*")],
         )
         if not yaml_path:
             return
+        label = "\u6821\u9a8c\u6570\u636e\u96c6"
+        self._reset_tool_progress(label, "\u51c6\u5907\u6821\u9a8c...")
         self._run_task(
-            lambda: self._validate_dataset_worker(dataset_dir, yaml_path),
-            "正在校验数据集...",
+            lambda: self._validate_dataset_worker(
+                dataset_dir,
+                yaml_path,
+                lambda done, total, msg: self._post_tool_progress(label, done, total, msg),
+            ),
+            "\u6b63\u5728\u6821\u9a8c\u6570\u636e\u96c6...",
             error_action="validate_dataset_failed",
+            show_global_progress=False,
+            on_done=lambda: self._finish_tool_progress(label, "\u6821\u9a8c\u5b8c\u6210"),
+            on_error=lambda exc: self._fail_tool_progress(label, f"\u6821\u9a8c\u5931\u8d25\uff1a{exc}"),
         )
 
-    def _validate_dataset_worker(self, dataset_dir, yaml_path):
-        """在线程中运行 dataset_validator.validate_dataset 并展示 JSON 报告。"""
+    def _validate_dataset_worker(self, dataset_dir, yaml_path, progress=None):
+        """Run dataset_validator.validate_dataset in background."""
         from dataset_validator import validate_dataset
 
+        if progress:
+            progress(1, 2, "\u6b63\u5728\u68c0\u67e5\u56fe\u7247\u548c\u6807\u7b7e")
         result = validate_dataset(dataset_dir, yaml_path)
+        if progress:
+            progress(2, 2, "\u6821\u9a8c\u4efb\u52a1\u5b8c\u6210")
         self.db.log_operation(self.user["id"], "validate_dataset", json.dumps(result, ensure_ascii=False))
-        self.after(0, lambda: self._show_text_window("数据集校验结果", json.dumps(result, ensure_ascii=False, indent=2)))
+        self.after(0, lambda: self._show_text_window("\u6570\u636e\u96c6\u6821\u9a8c\u7ed3\u679c", json.dumps(result, ensure_ascii=False, indent=2)))
 
     def generate_dataset_preview(self):
-        """生成数据集预览图，方便报告或验收展示样本质量。"""
-        dataset_dir = filedialog.askdirectory(title="选择数据集目录")
+        """Generate dataset preview image."""
+        dataset_dir = filedialog.askdirectory(title="\u9009\u62e9\u6570\u636e\u96c6\u76ee\u5f55")
         if not dataset_dir:
             return
         target = filedialog.asksaveasfilename(
-            title="保存预览图",
+            title="\u4fdd\u5b58\u9884\u89c8\u56fe",
             defaultextension=".png",
             filetypes=[("PNG image", "*.png")],
         )
         if not target:
             return
+        label = "\u751f\u6210\u6570\u636e\u9884\u89c8"
+        self._reset_tool_progress(label, "\u51c6\u5907\u751f\u6210\u9884\u89c8...")
         self._run_task(
-            lambda: self._generate_dataset_preview_worker(dataset_dir, target),
-            "正在生成数据集预览...",
+            lambda: self._generate_dataset_preview_worker(
+                dataset_dir,
+                target,
+                lambda done, total, msg: self._post_tool_progress(label, done, total, msg),
+            ),
+            "\u6b63\u5728\u751f\u6210\u6570\u636e\u96c6\u9884\u89c8...",
             error_action="dataset_preview_failed",
+            show_global_progress=False,
+            on_done=lambda: self._finish_tool_progress(label, "\u9884\u89c8\u751f\u6210\u5b8c\u6210"),
+            on_error=lambda exc: self._fail_tool_progress(label, f"\u751f\u6210\u5931\u8d25\uff1a{exc}"),
         )
 
-    def _generate_dataset_preview_worker(self, dataset_dir, target):
-        """在线程中运行 dataset_validator.generate_preview。"""
+    def _generate_dataset_preview_worker(self, dataset_dir, target, progress=None):
+        """Run dataset_validator.generate_preview in background."""
         from dataset_validator import generate_preview
 
+        if progress:
+            progress(1, 2, "\u6b63\u5728\u8bfb\u53d6\u6570\u636e\u96c6\u6837\u672c")
         generate_preview(dataset_dir, target)
+        if progress:
+            progress(2, 2, "\u9884\u89c8\u56fe\u751f\u6210\u5b8c\u6210")
         output = Path(target)
         self.db.log_operation(self.user["id"], "generate_dataset_preview", str(output))
-        self.after(0, lambda: messagebox.showinfo("预览图已生成", f"已保存到：\n{output}"))
+        self.after(0, lambda: messagebox.showinfo("\u9884\u89c8\u56fe\u5df2\u751f\u6210", f"\u5df2\u4fdd\u5b58\u5230\uff1a\\n{output}"))
 
     def _check_url_worker(self, url):
         """在线程中执行网络请求，失败信息会以友好弹窗展示。"""
@@ -3837,9 +4022,17 @@ class MainFrame(ttk.Frame):
         ).pack(side="right")
         self.apply_visual_zoom()
 
-    def _run_task(self, target, status, on_done=None, error_action=None):
-        """使用 threading.Thread 执行耗时任务，保证 GUI 主线程不冻结。"""
-        self._begin_task(status)
+    def _run_task(
+        self,
+        target,
+        status,
+        on_done=None,
+        error_action=None,
+        show_global_progress=True,
+        on_error=None,
+    ):
+        """?? threading.Thread ????????? GUI ???????"""
+        self._begin_task(status, show_global_progress=show_global_progress)
 
         def runner():
             try:
@@ -3847,31 +4040,34 @@ class MainFrame(ttk.Frame):
             except Exception as exc:
                 if error_action:
                     self.db.log_operation(self.user["id"], error_action, str(exc))
-                self.after(0, lambda exc=exc: self._show_error("任务执行失败", exc))
-            finally:
+                if on_error is not None:
+                    self.after(0, lambda exc=exc: on_error(exc))
+                self.after(0, lambda exc=exc: self._show_error("??????", exc))
+            else:
                 if on_done is not None:
                     self.after(0, on_done)
-                self.after(0, self._finish_task)
+            finally:
+                self.after(0, lambda: self._finish_task(show_global_progress=show_global_progress))
 
         thread = threading.Thread(target=runner, daemon=True)
         thread.start()
         return thread
 
-    def _begin_task(self, status):
-        """记录新任务数量，并把状态栏切换到正在执行。"""
+    def _begin_task(self, status, show_global_progress=True):
+        """?????????????????????"""
         self.active_tasks += 1
         self.status_var.set(status)
         if "tasks" in self.stat_cards:
             self.stat_cards["tasks"].update_value(str(self.active_tasks))
-        self.task_count_var.set(f"后台任务：{self.active_tasks}")
+        self.task_count_var.set(f"?????{self.active_tasks}")
 
-    def _finish_task(self):
-        """任务结束后恢复 Ready 状态或保留其它任务的运行提示。"""
+    def _finish_task(self, show_global_progress=True):
+        """??????? Ready ???????????????"""
         self.active_tasks = max(0, self.active_tasks - 1)
-        self.status_var.set("Ready" if self.active_tasks == 0 else "仍有任务运行中...")
+        self.status_var.set("Ready" if self.active_tasks == 0 else "???????...")
         if "tasks" in self.stat_cards:
             self.stat_cards["tasks"].update_value(str(self.active_tasks))
-        self.task_count_var.set(f"后台任务：{self.active_tasks}")
+        self.task_count_var.set(f"?????{self.active_tasks}")
         self.refresh_dashboard()
 
     def _show_error(self, title, exc):
@@ -3964,6 +4160,7 @@ class StudyMonitorApp(tk.Tk):
         self.title("Study Behavior Monitor")
         self.geometry("1120x720")
         self.minsize(980, 620)
+        self.report_callback_exception = self._handle_callback_exception
         configure_app_style(self)
 
         # 数据库和认证服务只创建一次，页面切换时复用同一份状态。
@@ -3972,6 +4169,14 @@ class StudyMonitorApp(tk.Tk):
         self.auth.ensure_default_admin()
         self.current_frame = None
         self.show_login()
+
+    def _handle_callback_exception(self, exc_type, exc_value, exc_tb):
+        """Log exceptions raised by Tkinter callbacks in packaged windowed builds."""
+        log_path = write_runtime_error("tk_callback", exc_type, exc_value, exc_tb)
+        messagebox.showerror(
+            "程序运行错误",
+            f"界面执行时发生错误，已写入日志：\n{log_path}",
+        )
 
     def show_login(self):
         """显示登录页，切换页面前销毁旧 Frame。"""
@@ -3984,8 +4189,20 @@ class StudyMonitorApp(tk.Tk):
         """登录成功后显示主工作台。"""
         if self.current_frame:
             self.current_frame.destroy()
-        self.current_frame = MainFrame(self, self.db, self.auth, user)
-        self.current_frame.pack(fill="both", expand=True)
+        try:
+            self.current_frame = MainFrame(self, self.db, self.auth, user)
+            self.current_frame.pack(fill="both", expand=True)
+            self.current_frame.lift()
+            self.update_idletasks()
+            self.db.log_operation(user["id"], "main_loaded", "Main interface loaded.")
+        except Exception as exc:
+            log_path = write_runtime_error("show_main", type(exc), exc, exc.__traceback__)
+            self.current_frame = LoginFrame(self, self.auth, self.show_main)
+            self.current_frame.pack(fill="both", expand=True)
+            messagebox.showerror(
+                "主界面加载失败",
+                f"登录成功，但主界面加载失败。\n错误日志：{log_path}",
+            )
 
 
 def main():
